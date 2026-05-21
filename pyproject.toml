@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "run-lab"
+version = "0.1.0a0"
+description = "User-facing Jupyter/JupyterLab workbench for reproducible AI-assisted research"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "Jeramee Oliver"}]
+dependencies = []
+
+[project.scripts]
+run-lab = "run_lab.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
