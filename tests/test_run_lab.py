@@ -1,31 +1,656 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
+
 from run_lab.workspace import init_workspace, inspect_workspace
 from run_lab.runner import run_demo
 from run_lab.verify import verify_run
 from run_lab.replay import inspect_replay_manifest
 
+
 def test_run_lab_workspace_run_verify(tmp_path):
     workspace = init_workspace(tmp_path / "workspace")
     state = inspect_workspace(workspace)
     assert state["exists"]
+
     run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "demo")
     result = verify_run(run_dir)
-    assert result["verification_status"] == "pass"
-    assert (run_dir / "reports" / "rendered_report.md").exists()
+
+    assert result["verification_status"] == "passed"
+    assert result["checks"]["required_record_types"] == "passed"
+    assert result["checks"]["required_fields_present"] == "passed"
+    assert result["checks"]["authority_flags_conservative"] == "passed"
+    assert result["checks"]["placeholder_integration_flags_conservative"] == "passed"
+    assert result["checks"]["artifact_manifest_lists_required_artifacts"] == "passed"
+    assert result["checks"]["artifact_manifest_paths_and_hashes"] == "passed"
+    assert result["checks"]["replay_manifest_artifacts_exist"] == "passed"
+    assert result["checks"]["record_run_ids_consistent"] == "passed"
+    assert result["checks"]["packet_paths_safe_relative_posix"] == "passed"    
+
+    assert (run_dir / "reports" / "report.md").exists()
+    assert (run_dir / "reports" / "report.html").exists()
+    assert (run_dir / "records" / "execution_record.json").exists()
+    assert (run_dir / "records" / "source_citation_record.json").exists()
+    assert (run_dir / "records" / "context_pack.json").exists()
 
     verification_report = run_dir / "records" / "verification_report.json"
     assert verification_report.exists()
 
-    artifact_manifest = (run_dir / "records" / "artifact_manifest.json").read_text(encoding="utf-8")
-    assert "records/replay_manifest.json" in artifact_manifest
-    assert "records/artifact_manifest.json" in artifact_manifest
-    assert "records/verification_report.json" in artifact_manifest
+    artifact_manifest_text = (run_dir / "records" / "artifact_manifest.json").read_text(encoding="utf-8")
+    assert "records/replay_manifest.json" in artifact_manifest_text
+    assert "records/artifact_manifest.json" in artifact_manifest_text
+    assert "records/verification_report.json" in artifact_manifest_text
+    assert "reports/report.md" in artifact_manifest_text
 
     replay_report = inspect_replay_manifest(run_dir / "records" / "replay_manifest.json")
     assert replay_report["record_type"] == "replay_inspection_report"
     assert replay_report["run_id"] == "demo"
+    assert replay_report["replay_status"] == "not_run"
     assert "inputs/query_job.json" in replay_report["replay_artifacts"]
-    assert "reports/rendered_report.md" in replay_report["replay_artifacts"]
+    assert "reports/report.md" in replay_report["replay_artifacts"]
     assert replay_report["authority_flags"]["correctness_proven"] is False
 
     assert not (run_dir / "records" / "lab_run_record.json").exists()
+    assert not (run_dir / "records" / "notebook_run_record.json").exists()
+
+
+def test_cli_commands_smoke_preserve_packet_boundary(tmp_path):
+    workspace = tmp_path / "workspace"
+    env = {**os.environ, "PYTHONPATH": "src"}
+
+    init_result = subprocess.run(
+        [sys.executable, "-m", "run_lab", "init", str(workspace)],
+        check=True,
+        cwd=os.getcwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert str(workspace) in init_result.stdout
+
+    inspect_result = subprocess.run(
+        [sys.executable, "-m", "run_lab", "inspect", str(workspace)],
+        check=True,
+        cwd=os.getcwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert "rag_literature_demo.json" in inspect_result.stdout
+
+    run_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "run_lab",
+            "run",
+            "--workspace",
+            str(workspace),
+            "--query-job",
+            "jobs/rag_literature_demo.json",
+            "--output-prefix",
+            "cli_demo",
+        ],
+        check=True,
+        cwd=os.getcwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert "cli_demo" in run_result.stdout
+
+    run_dir = workspace / "runs" / "cli_demo"
+    verify_result = subprocess.run(
+        [sys.executable, "-m", "run_lab", "verify", str(run_dir)],
+        check=True,
+        cwd=os.getcwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    verify_payload = json.loads(verify_result.stdout)
+    assert verify_payload["verification_status"] == "passed"
+    assert verify_payload["checks"]["artifact_manifest_paths_and_hashes"] == "passed"
+
+    replay_result = subprocess.run(
+        [sys.executable, "-m", "run_lab", "replay", str(run_dir / "records" / "replay_manifest.json")],
+        check=True,
+        cwd=os.getcwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    replay_payload = json.loads(replay_result.stdout)
+    assert replay_payload["record_type"] == "replay_inspection_report"
+    assert replay_payload["authority_flags"]["correctness_proven"] is False
+
+
+def test_verify_fails_when_required_record_missing(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "missing_record_demo")
+    (run_dir / "records" / "execution_record.json").unlink()
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["required_artifacts_present"] == "failed"
+    assert "records/execution_record.json" in result["missing"]
+    assert (run_dir / "records" / "verification_report.json").exists()
+
+
+def test_verify_fails_when_manifest_hash_mismatch(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "hash_mismatch_demo")
+    report_path = run_dir / "reports" / "report.md"
+    report_path.write_text(report_path.read_text(encoding="utf-8") + "\nmutated after manifest\n", encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["artifact_manifest_paths_and_hashes"] == "failed"
+    assert any("hash mismatch for reports/report.md" in error for error in result["artifact_hash_errors"])
+
+
+def test_verify_fails_when_required_field_missing(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "missing_field_demo")
+
+    query_job_path = run_dir / "inputs" / "query_job.json"
+    query_job = json.loads(query_job_path.read_text(encoding="utf-8"))
+    query_job.pop("query")
+    query_job_path.write_text(json.dumps(query_job, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["required_fields_present"] == "failed"
+    assert any("inputs/query_job.json: missing required field 'query'" in error for error in result["required_field_errors"])
+    
+    
+def test_verify_can_run_twice_without_self_breaking_manifest(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "verify_twice_demo")
+
+    first = verify_run(run_dir)
+    second = verify_run(run_dir)
+
+    assert first["verification_status"] == "passed"
+    assert second["verification_status"] == "passed"
+    assert second["checks"]["artifact_manifest_paths_and_hashes"] == "passed"
+    assert second["checks"]["artifact_manifest_lists_required_artifacts"] == "passed"
+
+
+def test_verify_fails_when_manifested_artifact_hash_changes(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "tamper_demo")
+
+    report_path = run_dir / "reports" / "report.md"
+    if not report_path.exists():
+        report_path = run_dir / "reports" / "rendered_report.md"
+
+    report_path.write_text(
+        report_path.read_text(encoding="utf-8") + "\n\nTampered after manifest creation.\n",
+        encoding="utf-8",
+    )
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["artifact_manifest_paths_and_hashes"] == "failed"
+    assert any("hash mismatch" in error for error in result["artifact_hash_errors"])
+    
+    
+def test_cli_verify_exit_code_contract(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "cli_verify_demo")
+
+    passed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "verify", str(run_dir)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert passed.returncode == 0
+    assert '"verification_status": "passed"' in passed.stdout
+
+    report_path = run_dir / "reports" / "report.md"
+    if not report_path.exists():
+        report_path = run_dir / "reports" / "rendered_report.md"
+
+    report_path.write_text(
+        report_path.read_text(encoding="utf-8") + "\n\nTampered after manifest creation.\n",
+        encoding="utf-8",
+    )
+
+    failed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "verify", str(run_dir)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failed.returncode != 0
+    assert '"verification_status": "failed"' in failed.stdout
+
+
+def test_run_packet_uses_official_report_artifact_names(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "official_report_names_demo")
+
+    assert (run_dir / "reports" / "report.md").exists()
+    assert (run_dir / "reports" / "report.html").exists()
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "passed"
+
+    artifact_manifest = json.loads(
+        (run_dir / "records" / "artifact_manifest.json").read_text(encoding="utf-8")
+    )
+    artifact_paths = {
+        artifact.get("path")
+        for artifact in artifact_manifest["artifacts"]
+        if isinstance(artifact, dict)
+    }
+
+    assert "reports/report.md" in artifact_paths
+    assert "reports/report.html" in artifact_paths
+
+
+def test_persisted_verification_report_contract(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "verification_report_contract_demo")
+
+    result = verify_run(run_dir)
+
+    report_path = run_dir / "records" / "verification_report.json"
+    assert report_path.exists()
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert report["record_type"] == "verification_report"
+    assert report["verification_status"] == result["verification_status"]
+    assert report["verification_status"] in {"passed", "failed", "passed_with_warnings", "not_run"}
+    assert isinstance(report["checks"], dict)
+    assert report["checks"]["required_artifacts_present"] == "passed"
+    assert report["checks"]["json_parseable"] == "passed"
+    assert report["authority_flags"]["correctness_proven"] is False
+    assert report["authority_flags"]["repo_mutated"] is False
+    assert report["authority_flags"]["state_promoted"] is False
+    assert report["authority_flags"]["source_control_touched"] is False
+    assert "mechanical" in report["authority_note"].lower()
+    assert "scientific validation" in report["authority_note"].lower()
+
+    artifact_manifest = json.loads(
+        (run_dir / "records" / "artifact_manifest.json").read_text(encoding="utf-8")
+    )
+    verification_entries = [
+        artifact
+        for artifact in artifact_manifest["artifacts"]
+        if artifact.get("path") == "records/verification_report.json"
+    ]
+
+    assert len(verification_entries) == 1
+    assert verification_entries[0]["hash"]["algorithm"] == "sha256"
+    assert verification_entries[0]["hash"]["value"]
+
+
+def test_verify_fails_when_replay_manifest_lists_missing_artifact(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "missing_replay_artifact_demo")
+
+    replay_manifest_path = run_dir / "records" / "replay_manifest.json"
+    replay_manifest = json.loads(replay_manifest_path.read_text(encoding="utf-8"))
+    replay_manifest["replay_artifacts"].append("reports/does_not_exist.md")
+    replay_manifest_path.write_text(json.dumps(replay_manifest, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["replay_manifest_artifacts_exist"] == "failed"
+    assert any("reports/does_not_exist.md" in error for error in result["replay_artifact_errors"])
+    
+    
+def test_verify_fails_when_record_run_id_does_not_match_packet(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "run_id_demo")
+
+    retrieval_record_path = run_dir / "records" / "retrieval_record.json"
+    retrieval_record = json.loads(retrieval_record_path.read_text(encoding="utf-8"))
+    retrieval_record["run_id"] = "wrong_run_id"
+    retrieval_record_path.write_text(json.dumps(retrieval_record, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["record_run_ids_consistent"] == "failed"
+    assert result["run_id_errors"]
+    assert any("wrong_run_id" in error for error in result["run_id_errors"])
+
+
+def test_verify_fails_when_artifact_manifest_uses_unsafe_path(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "unsafe_path_demo")
+
+    artifact_manifest_path = run_dir / "records" / "artifact_manifest.json"
+    artifact_manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    artifact_manifest["artifacts"].append({
+        "path": "../outside_packet.txt",
+        "hash": {
+            "algorithm": "sha256",
+            "value": "not-a-real-hash",
+        },
+    })
+    artifact_manifest_path.write_text(json.dumps(artifact_manifest, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["packet_paths_safe_relative_posix"] == "failed"
+    assert any("../outside_packet.txt" in error for error in result["safe_path_errors"])
+    
+    
+def test_verify_fails_when_replay_manifest_uses_unsafe_path(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "unsafe_replay_path_demo")
+
+    replay_manifest_path = run_dir / "records" / "replay_manifest.json"
+    replay_manifest = json.loads(replay_manifest_path.read_text(encoding="utf-8"))
+    replay_manifest["replay_artifacts"].append(r"C:\absolute\outside_packet.txt")
+    replay_manifest_path.write_text(json.dumps(replay_manifest, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["packet_paths_safe_relative_posix"] == "failed"
+    assert any("C:\\absolute\\outside_packet.txt" in error for error in result["safe_path_errors"])
+
+
+def test_cli_replay_inspects_manifest_without_claiming_success(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "cli_replay_demo")
+
+    replay_manifest_path = run_dir / "records" / "replay_manifest.json"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "replay", str(replay_manifest_path)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert '"record_type": "replay_inspection_report"' in completed.stdout
+    assert '"run_id": "cli_replay_demo"' in completed.stdout
+    assert '"replay_status": "not_run"' in completed.stdout
+    assert "Replay metadata is not replay success." in completed.stdout
+    assert "replay_success" not in completed.stdout
+    assert "validated" not in completed.stdout.lower()
+    assert "certified" not in completed.stdout.lower()
+    assert "approved" not in completed.stdout.lower()
+
+
+def test_cli_run_creates_packet_that_cli_verify_accepts(tmp_path):
+    workspace = tmp_path / "workspace"
+    env = {**os.environ, "PYTHONPATH": "src"}
+
+    init_completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "init", str(workspace)],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert init_completed.returncode == 0
+
+    run_completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "run_lab",
+            "run",
+            "--workspace",
+            str(workspace),
+            "--query-job",
+            "jobs/rag_literature_demo.json",
+            "--output-prefix",
+            "cli_run_contract_demo",
+        ],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert run_completed.returncode == 0
+
+    run_dir = workspace / "runs" / "cli_run_contract_demo"
+    assert run_dir.exists()
+    assert (run_dir / "records" / "artifact_manifest.json").exists()
+    assert (run_dir / "records" / "replay_manifest.json").exists()
+    assert (run_dir / "reports" / "report.md").exists()
+    assert (run_dir / "reports" / "report.html").exists()
+
+    verify_completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "verify", str(run_dir)],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert verify_completed.returncode == 0
+    assert '"verification_status": "passed"' in verify_completed.stdout
+    assert '"required_artifacts_present": "passed"' in verify_completed.stdout
+    assert '"artifact_manifest_paths_and_hashes": "passed"' in verify_completed.stdout
+
+
+def test_cli_inspect_reports_workspace_without_authority_claims(tmp_path):
+    workspace = tmp_path / "workspace"
+    env = {**os.environ, "PYTHONPATH": "src"}
+
+    init_completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "init", str(workspace)],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert init_completed.returncode == 0
+
+    inspect_completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "inspect", str(workspace)],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert inspect_completed.returncode == 0
+
+    inspect_report = json.loads(inspect_completed.stdout)
+
+    assert inspect_report["record_type"] == "workspace_inspection_report"
+    assert inspect_report["workspace"] == str(workspace)
+    assert inspect_report["authority_flags"]["correctness_proven"] is False
+    assert inspect_report["authority_flags"]["repo_mutated"] is False
+    assert inspect_report["authority_flags"]["state_promoted"] is False
+    assert inspect_report["authority_flags"]["source_control_touched"] is False
+
+    assert "validated" not in inspect_completed.stdout.lower()
+    assert "certified" not in inspect_completed.stdout.lower()
+    assert "approved" not in inspect_completed.stdout.lower()
+    assert inspect_report["authority_flags"]["state_promoted"] is False
+    assert '"state_promoted": true' not in inspect_completed.stdout.lower()
+    assert "scientifically_valid" not in inspect_completed.stdout.lower()
+
+
+def test_cli_run_refuses_to_silently_overwrite_existing_packet(tmp_path):
+    workspace = tmp_path / "workspace"
+    env = {**os.environ, "PYTHONPATH": "src"}
+
+    init_completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "init", str(workspace)],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert init_completed.returncode == 0
+
+    first_run = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "run_lab",
+            "run",
+            "--workspace",
+            str(workspace),
+            "--query-job",
+            "jobs/rag_literature_demo.json",
+            "--output-prefix",
+            "overwrite_guard_demo",
+        ],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert first_run.returncode == 0
+
+    run_dir = workspace / "runs" / "overwrite_guard_demo"
+    marker_path = run_dir / "manual_marker.txt"
+    marker_path.write_text("must not be deleted by second run", encoding="utf-8")
+
+    second_run = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "run_lab",
+            "run",
+            "--workspace",
+            str(workspace),
+            "--query-job",
+            "jobs/rag_literature_demo.json",
+            "--output-prefix",
+            "overwrite_guard_demo",
+        ],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert second_run.returncode != 0
+    assert marker_path.exists()
+    assert marker_path.read_text(encoding="utf-8") == "must not be deleted by second run"
+    
+    
+def test_cli_run_fails_when_query_job_is_missing_without_creating_packet(tmp_path):
+    workspace = tmp_path / "workspace"
+    env = {**os.environ, "PYTHONPATH": "src"}
+
+    init_completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "init", str(workspace)],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert init_completed.returncode == 0
+
+    run_completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "run_lab",
+            "run",
+            "--workspace",
+            str(workspace),
+            "--query-job",
+            "jobs/does_not_exist.json",
+            "--output-prefix",
+            "missing_query_job_demo",
+        ],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert run_completed.returncode != 0
+    assert not (workspace / "runs" / "missing_query_job_demo").exists()
+    assert "does_not_exist.json" in run_completed.stderr or "does_not_exist.json" in run_completed.stdout
+
+
+def test_cli_verify_fails_cleanly_when_run_dir_is_missing(tmp_path):
+    missing_run_dir = tmp_path / "workspace" / "runs" / "missing_run"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "verify", str(missing_run_dir)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert not missing_run_dir.exists()
+    combined_output = completed.stdout + completed.stderr
+    assert "missing_run" in combined_output
+
+
+def test_cli_verify_fails_cleanly_when_run_path_is_file(tmp_path):
+    fake_run_path = tmp_path / "not_a_run_dir.json"
+    fake_run_path.write_text("{}", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "verify", str(fake_run_path)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert fake_run_path.exists()
+    assert fake_run_path.is_file()
+
+    combined_output = completed.stdout + completed.stderr
+    assert "not_a_run_dir.json" in combined_output
+
+
+def test_cli_replay_fails_cleanly_when_manifest_is_missing(tmp_path):
+    missing_manifest = tmp_path / "workspace" / "runs" / "missing_run" / "records" / "replay_manifest.json"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "run_lab", "replay", str(missing_manifest)],
+        cwd=Path.cwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert not missing_manifest.exists()
+
+    combined_output = completed.stdout + completed.stderr
+    assert "replay_manifest.json" in combined_output
+    assert "replay_success" not in combined_output.lower()
+    assert "validated" not in combined_output.lower()
+    assert "certified" not in combined_output.lower()
+    assert "approved" not in combined_output.lower()

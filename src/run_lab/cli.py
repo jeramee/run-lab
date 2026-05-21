@@ -5,6 +5,7 @@ from .runner import run_demo
 from .verify import verify_run
 from .replay import inspect_replay_manifest
 
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="run-lab")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -40,11 +41,12 @@ def main(argv=None) -> int:
     if args.command == "verify":
         result = verify_run(args.run_dir)
         print(json.dumps(result, indent=2, sort_keys=True))
-        return 0 if result["verification_status"] == "pass" else 1
+        return 0 if result["verification_status"] in {"passed", "passed_with_warnings"} else 1
     if args.command == "replay":
         print(json.dumps(inspect_replay_manifest(args.manifest), indent=2, sort_keys=True))
         return 0
     return 2
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

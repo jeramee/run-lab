@@ -6,4 +6,8 @@ build/
 dist/
 *.egg-info/
 
+tree.py
+tree.txt
 
+flatten_anytree.py
+FLATTENED_CODE.txt
