@@ -81,21 +81,67 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
     return run_dir
 
 def _write_manifests(run_dir: Path, run_id: str, created: str) -> None:
+    replay_manifest_path = run_dir / "records" / "replay_manifest.json"
+    artifact_manifest_path = run_dir / "records" / "artifact_manifest.json"
+
+    replay_artifacts = [
+        "inputs/query_job.json",
+        "inputs/index_reference.json",
+        "parameters/papermill_parameters.json",
+        "records/retrieval_record.json",
+        "records/source_citations.json",
+        "context/context_pack.md",
+        "records/notebook_run_record.json",
+        "records/environment_report.json",
+        f"executed/{run_id}.executed.ipynb",
+        "reports/rendered_report.md",
+    ]
+    html_report = run_dir / "reports" / "rendered_report.html"
+    if html_report.exists():
+        replay_artifacts.append("reports/rendered_report.html")
+
+    write_json(replay_manifest_path, {
+        "record_type": "replay_manifest",
+        "run_id": run_id,
+        "created_at": created,
+        "replay_status": "replay_not_attempted",
+        "replay_scope": "static_demo_run",
+        "replay_artifacts": replay_artifacts,
+        "replay_command": [
+            "run-lab",
+            "run",
+            "--workspace",
+            ".",
+            "--query-job",
+            "jobs/rag_literature_demo.json",
+            "--output-prefix",
+            run_id,
+        ],
+        "authority_flags": dict(AUTHORITY_FLAGS),
+        "limitations": [
+            "Replay metadata records the intended local run shape only.",
+            "No Papermill execution in this rough scaffold.",
+            "No scientific validation.",
+        ],
+    })
+
     artifacts = []
     for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
+        if path == artifact_manifest_path:
+            continue
         rel = path.relative_to(run_dir).as_posix()
         artifacts.append({"path": rel, "hash": {"algorithm": "sha256", "value": sha256_file(path)}})
-    write_json(run_dir / "records" / "artifact_manifest.json", {
+
+    artifacts.append({
+        "path": artifact_manifest_path.relative_to(run_dir).as_posix(),
+        "hash_status": "not_applicable_self_referential_manifest",
+        "authority_note": "The manifest lists itself, but does not hash itself because that would be self-referential.",
+    })
+
+    write_json(artifact_manifest_path, {
         "record_type": "artifact_manifest",
         "run_id": run_id,
         "created_at": created,
         "artifacts": artifacts,
         "authority_flags": dict(AUTHORITY_FLAGS),
-    })
-    write_json(run_dir / "records" / "replay_manifest.json", {
-        "record_type": "replay_manifest",
-        "run_id": run_id,
-        "replay_status": "replay_not_attempted",
-        "replay_scope": "static_demo_run",
-        "limitations": ["No Papermill execution in this rough scaffold.", "No scientific validation."],
     })

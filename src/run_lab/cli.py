@@ -40,7 +40,7 @@ def main(argv=None) -> int:
     if args.command == "verify":
         result = verify_run(args.run_dir)
         print(json.dumps(result, indent=2, sort_keys=True))
-        return 0 if result["verification_status"] == "passed_mechanical_checks" else 1
+        return 0 if result["verification_status"] == "pass" else 1
     if args.command == "replay":
         print(json.dumps(inspect_replay_manifest(args.manifest), indent=2, sort_keys=True))
         return 0
