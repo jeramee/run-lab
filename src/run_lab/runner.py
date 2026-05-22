@@ -39,8 +39,22 @@ def _optional_dependency_boundary() -> dict:
             },
         },
         "authority_note": "Optional dependency availability is recorded only; RunLab v0.1 does not execute notebooks.",
-    }    
-    
+    }
+
+
+def _notebook_execution_disabled_policy() -> dict:
+    return {
+        "policy_status": "disabled_by_default",
+        "execution_disabled_by_default": True,
+        "real_execution_permitted": False,
+        "actual_notebook_execution": False,
+        "papermill_execution_requested": False,
+        "papermill_execution_performed": False,
+        "nbclient_execution_performed": False,
+        "override_supported": False,
+        "authority_note": "RunLab v0.1 records notebook-shaped evidence only and does not execute notebooks.",
+    }
+
 
 def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = "rag_literature_demo", render: str = "html") -> Path:
     root = Path(workspace)
@@ -89,13 +103,15 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
     notebook_template = job.get("notebook_template", "notebooks/templates/literature_evidence_runner.ipynb")
     executed_notebook = f"executed/{output_prefix}.executed.ipynb"
     optional_dependency_boundary = _optional_dependency_boundary()
+    notebook_execution_policy = _notebook_execution_disabled_policy()
 
     write_json(run_dir / "parameters" / "papermill_parameters.json", {
         "record_type": "papermill_parameters",
         "run_id": output_prefix,
         "execution_mode": "placeholder_no_papermill",
         "execution_backend": "placeholder_papermill",
-        "optional_dependency_boundary": optional_dependency_boundary,        
+        "optional_dependency_boundary": optional_dependency_boundary,
+        "notebook_execution_policy": notebook_execution_policy,
         "notebook_template": notebook_template,
         "executed_notebook": executed_notebook,
         "query": job.get("query"),
@@ -146,6 +162,7 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
         run_id=output_prefix,
         query=job.get("query"),
         notebook_template=notebook_template,
+        notebook_execution_policy=notebook_execution_policy,
     ))
 
     write_json(run_dir / "records" / "execution_record.json", {
@@ -154,6 +171,7 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
         "execution_status": "placeholder_executed",
         "execution_backend": "placeholder_papermill",
         "optional_dependency_boundary": optional_dependency_boundary,
+        "notebook_execution_policy": notebook_execution_policy,
         "notebook_template": notebook_template,
         "executed_notebook": executed_notebook,
         "authority_flags": dict(AUTHORITY_FLAGS),
@@ -184,7 +202,12 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
     return run_dir
 
 
-def _build_placeholder_notebook_stub(run_id: str, query: str | None, notebook_template: str) -> dict:
+def _build_placeholder_notebook_stub(
+    run_id: str,
+    query: str | None,
+    notebook_template: str,
+    notebook_execution_policy: dict,
+) -> dict:
     return {
         "cells": [
             {
@@ -237,6 +260,7 @@ def _build_placeholder_notebook_stub(run_id: str, query: str | None, notebook_te
             "papermill_invoked": False,
             "nbclient_invoked": False,
             "optional_dependency_boundary": _optional_dependency_boundary(),
+            "notebook_execution_policy": notebook_execution_policy,
         },
         "nbformat": 4,
         "nbformat_minor": 5,

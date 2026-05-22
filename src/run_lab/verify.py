@@ -84,6 +84,7 @@ REQUIRED_FIELDS = {
         "execution_mode",
         "execution_backend",
         "optional_dependency_boundary",
+        "notebook_execution_policy",
         "notebook_template",
         "executed_notebook",
         "query",
@@ -98,6 +99,7 @@ REQUIRED_FIELDS = {
         "execution_status",
         "execution_backend",
         "optional_dependency_boundary",
+        "notebook_execution_policy",
         "notebook_template",
         "executed_notebook",
         "authority_flags",
@@ -212,7 +214,9 @@ def verify_run(run_dir: str | Path) -> dict:
     run_id_errors = _check_run_id_consistency(parsed_json)
     safe_path_errors = _check_safe_relative_packet_paths(parsed_json)
     notebook_stub_errors = _check_executed_notebook_stub_shape(run_dir, parsed_json)
+    notebook_template_errors = _check_notebook_template_stub_shape(run_dir, parsed_json)
     optional_dependency_boundary_errors = _check_optional_dependency_boundary(parsed_json)
+    notebook_execution_policy_errors = _check_notebook_execution_disabled_policy(run_dir, parsed_json)
 
     checks = {
         "required_artifacts_present": _status(not missing),
@@ -227,7 +231,9 @@ def verify_run(run_dir: str | Path) -> dict:
         "record_run_ids_consistent": _status(not run_id_errors),
         "packet_paths_safe_relative_posix": _status(not safe_path_errors),
         "executed_notebook_stub_shape": _status(not notebook_stub_errors),
+        "notebook_template_stub_shape": _status(not notebook_template_errors),
         "optional_papermill_dependency_boundary_conservative": _status(not optional_dependency_boundary_errors),
+        "papermill_execution_disabled_by_default": _status(not notebook_execution_policy_errors),
     }
     status = "passed" if all(value == CHECK_PASSED for value in checks.values()) else "failed"
 
@@ -247,7 +253,9 @@ def verify_run(run_dir: str | Path) -> dict:
         "run_id_errors": run_id_errors,
         "safe_path_errors": safe_path_errors,
         "notebook_stub_errors": notebook_stub_errors,
+        "notebook_template_errors": notebook_template_errors,
         "optional_dependency_boundary_errors": optional_dependency_boundary_errors,
+        "notebook_execution_policy_errors": notebook_execution_policy_errors,
         "authority_flags": dict(AUTHORITY_FLAGS),
         "authority_note": "RunLab verification is mechanical artifact-shape checking only, not scientific validation.",
     }
@@ -383,6 +391,143 @@ def _check_optional_dependency_boundary(parsed_json: dict[str, dict]) -> list[st
                 errors.append(f"{rel}: optional_dependency_boundary.dependencies.{dependency_name}.available must be boolean")
             if dependency.get("used") is not False:
                 errors.append(f"{rel}: optional_dependency_boundary.dependencies.{dependency_name}.used must be false")
+
+    return errors
+
+
+def _check_notebook_execution_disabled_policy(run_dir: Path, parsed_json: dict[str, dict]) -> list[str]:
+    errors = []
+
+    policy_records: list[tuple[str, object]] = []
+    for rel in (
+        "parameters/papermill_parameters.json",
+        "records/execution_record.json",
+    ):
+        record = parsed_json.get(rel)
+        if record is None:
+            continue
+        policy_records.append((rel, record.get("notebook_execution_policy")))
+
+    execution_record = parsed_json.get("records/execution_record.json")
+    if execution_record is not None:
+        executed_notebook = execution_record.get("executed_notebook")
+        if isinstance(executed_notebook, str) and _is_safe_relative_posix_path(executed_notebook):
+            notebook_path = run_dir / executed_notebook
+            if notebook_path.exists():
+                try:
+                    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+                    metadata = notebook.get("metadata") if isinstance(notebook, dict) else None
+                    if isinstance(metadata, dict):
+                        policy_records.append((f"{executed_notebook}: metadata", metadata.get("notebook_execution_policy")))
+                except json.JSONDecodeError:
+                    pass
+
+    for rel, policy in policy_records:
+        if not isinstance(policy, dict):
+            errors.append(f"{rel}: notebook_execution_policy must be an object")
+            continue
+
+        if policy.get("policy_status") != "disabled_by_default":
+            errors.append(f"{rel}: notebook_execution_policy.policy_status must be 'disabled_by_default'")
+        if policy.get("execution_disabled_by_default") is not True:
+            errors.append(f"{rel}: notebook_execution_policy.execution_disabled_by_default must be true")
+        if policy.get("real_execution_permitted") is not False:
+            errors.append(f"{rel}: notebook_execution_policy.real_execution_permitted must be false")
+        if policy.get("actual_notebook_execution") is not False:
+            errors.append(f"{rel}: notebook_execution_policy.actual_notebook_execution must be false")
+        if policy.get("papermill_execution_requested") is not False:
+            errors.append(f"{rel}: notebook_execution_policy.papermill_execution_requested must be false")
+        if policy.get("papermill_execution_performed") is not False:
+            errors.append(f"{rel}: notebook_execution_policy.papermill_execution_performed must be false")
+        if policy.get("nbclient_execution_performed") is not False:
+            errors.append(f"{rel}: notebook_execution_policy.nbclient_execution_performed must be false")
+        if policy.get("override_supported") is not False:
+            errors.append(f"{rel}: notebook_execution_policy.override_supported must be false")
+
+    return errors
+
+
+
+def _check_notebook_template_stub_shape(run_dir: Path, parsed_json: dict[str, dict]) -> list[str]:
+    execution_record = parsed_json.get("records/execution_record.json")
+    if execution_record is None:
+        return []
+
+    notebook_template = execution_record.get("notebook_template")
+    if not isinstance(notebook_template, str) or not notebook_template:
+        return ["records/execution_record.json: notebook_template must be a non-empty string"]
+    if not _is_safe_relative_posix_path(notebook_template):
+        return [f"records/execution_record.json: notebook_template must be a safe relative POSIX path: {notebook_template}"]
+    if not notebook_template.startswith("notebooks/templates/"):
+        return [f"records/execution_record.json: notebook_template must point under notebooks/templates/: {notebook_template}"]
+
+    workspace_root = run_dir.parent.parent if run_dir.parent.name == "runs" else run_dir.parent
+    template_path = workspace_root / notebook_template
+    if not template_path.exists():
+        return [f"records/execution_record.json: notebook_template does not exist in workspace: {notebook_template}"]
+
+    try:
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"{notebook_template}: invalid notebook template JSON: {exc}"]
+
+    if not isinstance(template, dict):
+        return [f"{notebook_template}: notebook template JSON must be an object"]
+
+    errors = []
+    if template.get("nbformat") != 4:
+        errors.append(f"{notebook_template}: nbformat must be 4")
+    if not isinstance(template.get("nbformat_minor"), int):
+        errors.append(f"{notebook_template}: nbformat_minor must be an integer")
+
+    metadata = template.get("metadata")
+    if not isinstance(metadata, dict):
+        errors.append(f"{notebook_template}: metadata must be an object")
+    else:
+        if metadata.get("run_lab_template") is not True:
+            errors.append(f"{notebook_template}: metadata.run_lab_template must be true")
+        if metadata.get("integration_status") != "placeholder":
+            errors.append(f"{notebook_template}: metadata.integration_status must be 'placeholder'")
+        if metadata.get("placeholder_for") != "future_papermill_notebook_execution":
+            errors.append(f"{notebook_template}: metadata.placeholder_for must be future_papermill_notebook_execution")
+        if metadata.get("actual_notebook_execution") is not False:
+            errors.append(f"{notebook_template}: metadata.actual_notebook_execution must be false")
+        if metadata.get("papermill_invoked") is not False:
+            errors.append(f"{notebook_template}: metadata.papermill_invoked must be false")
+        if metadata.get("nbclient_invoked") is not False:
+            errors.append(f"{notebook_template}: metadata.nbclient_invoked must be false")
+
+    cells = template.get("cells")
+    if not isinstance(cells, list) or not cells:
+        errors.append(f"{notebook_template}: cells must be a non-empty list")
+        return errors
+
+    has_markdown = False
+    has_code = False
+    for index, cell in enumerate(cells):
+        if not isinstance(cell, dict):
+            errors.append(f"{notebook_template}: cell {index} must be an object")
+            continue
+        cell_type = cell.get("cell_type")
+        if cell_type == "markdown":
+            has_markdown = True
+        elif cell_type == "code":
+            has_code = True
+            if cell.get("execution_count") is not None:
+                errors.append(f"{notebook_template}: code cell {index} execution_count must be null for template stubs")
+            if cell.get("outputs") != []:
+                errors.append(f"{notebook_template}: code cell {index} outputs must be empty for template stubs")
+        else:
+            errors.append(f"{notebook_template}: cell {index} has unsupported cell_type {cell_type!r}")
+        if "source" not in cell:
+            errors.append(f"{notebook_template}: cell {index} missing source")
+        if not isinstance(cell.get("metadata"), dict):
+            errors.append(f"{notebook_template}: cell {index} metadata must be an object")
+
+    if not has_markdown:
+        errors.append(f"{notebook_template}: template must include at least one markdown cell")
+    if not has_code:
+        errors.append(f"{notebook_template}: template must include at least one code cell")
 
     return errors
 

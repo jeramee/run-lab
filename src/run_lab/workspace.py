@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from pathlib import Path
 from .constants import AUTHORITY_FLAGS, PLACEHOLDER_AUTHORITY_FLAGS, WORKSPACE_DIRS
 from .io import write_json
@@ -51,11 +51,55 @@ def init_workspace(path: str | Path) -> Path:
     template = root / "notebooks" / "templates" / "literature_evidence_runner.ipynb"
     if not template.exists():
         write_json(template, {
-            "cells": [],
+            "cells": [
+                {
+                    "cell_type": "markdown",
+                    "metadata": {
+                        "run_lab_cell_role": "template_boundary_notice",
+                    },
+                    "source": [
+                        "# RunLab Literature Evidence Runner Template\n",
+                        "\n",
+                        "This is a placeholder notebook template for future Papermill execution.\n",
+                        "RunLab v0.1 scaffolds this file for evidence-packet shape only.\n",
+                    ],
+                },
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {
+                        "tags": ["parameters"],
+                        "run_lab_cell_role": "future_papermill_parameters",
+                        "integration_status": "placeholder",
+                        "placeholder_for": "future_papermill_notebook_execution",
+                    },
+                    "outputs": [],
+                    "source": [
+                        "# Parameters cell for future Papermill execution\n",
+                        "RUN_ID = None\n",
+                        "QUERY = None\n",
+                        "NOTEBOOK_TEMPLATE = 'notebooks/templates/literature_evidence_runner.ipynb'\n",
+                        "ACTUAL_NOTEBOOK_EXECUTION = False\n",
+                    ],
+                },
+            ],
             "metadata": {
                 "run_lab_template": True,
+                "template_id": "literature_evidence_runner",
                 "integration_status": "placeholder",
-                "placeholder_for": "future_notebook_template_execution",
+                "placeholder_for": "future_papermill_notebook_execution",
+                "actual_notebook_execution": False,
+                "papermill_invoked": False,
+                "nbclient_invoked": False,
+                "kernelspec": {
+                    "display_name": "Python 3",
+                    "language": "python",
+                    "name": "python3",
+                },
+                "language_info": {
+                    "name": "python",
+                    "pygments_lexer": "ipython3",
+                },
             },
             "nbformat": 4,
             "nbformat_minor": 5,
@@ -74,3 +118,4 @@ def inspect_workspace(path: str | Path) -> dict:
         "authority_flags": dict(AUTHORITY_FLAGS),
         "authority_note": "RunLab workspace inspection reports local workspace shape only, not validation, certification, approval, promotion, or scientific correctness.",
     }
+
