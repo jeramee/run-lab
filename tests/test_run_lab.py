@@ -654,3 +654,140 @@ def test_cli_replay_fails_cleanly_when_manifest_is_missing(tmp_path):
     assert "validated" not in combined_output.lower()
     assert "certified" not in combined_output.lower()
     assert "approved" not in combined_output.lower()
+
+
+def test_notebook_template_placeholder_contract_is_explicit(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "notebook_placeholder_contract_demo")
+
+    execution_record = json.loads(
+        (run_dir / "records" / "execution_record.json").read_text(encoding="utf-8")
+    )
+    papermill_parameters = json.loads(
+        (run_dir / "parameters" / "papermill_parameters.json").read_text(encoding="utf-8")
+    )
+    executed_notebook = json.loads(
+        (run_dir / "executed" / "notebook_placeholder_contract_demo.executed.ipynb").read_text(encoding="utf-8")
+    )
+
+    assert execution_record["record_type"] == "execution_record"
+    assert execution_record["run_id"] == "notebook_placeholder_contract_demo"
+    assert execution_record["notebook_template"] == "notebooks/templates/literature_evidence_runner.ipynb"
+    assert execution_record["executed_notebook"] == "executed/notebook_placeholder_contract_demo.executed.ipynb"
+    assert execution_record["execution_backend"] == "placeholder_papermill"
+    assert execution_record["integration_status"] == "placeholder"
+    assert execution_record["placeholder_for"] == "future_papermill_notebook_execution"
+
+    assert papermill_parameters["record_type"] == "papermill_parameters"
+    assert papermill_parameters["run_id"] == "notebook_placeholder_contract_demo"
+    assert papermill_parameters["notebook_template"] == execution_record["notebook_template"]
+    assert papermill_parameters["executed_notebook"] == execution_record["executed_notebook"]
+    assert papermill_parameters["execution_backend"] == "placeholder_papermill"
+    assert papermill_parameters["integration_status"] == "placeholder"
+    assert papermill_parameters["placeholder_for"] == "future_papermill_notebook_execution"
+
+    assert executed_notebook["metadata"]["run_lab_execution"] == "placeholder"
+    assert executed_notebook["metadata"]["notebook_template"] == execution_record["notebook_template"]
+    assert executed_notebook["metadata"]["execution_backend"] == "placeholder_papermill"
+    assert executed_notebook["metadata"]["integration_status"] == "placeholder"
+    assert executed_notebook["metadata"]["placeholder_for"] == "future_papermill_notebook_execution"
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "passed"
+    assert result["checks"]["required_fields_present"] == "passed"
+    assert result["checks"]["placeholder_integration_flags_conservative"] == "passed"
+
+
+def test_real_nbformat_notebook_stub_shape_is_mechanically_verified(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "nbformat_stub_demo")
+
+    notebook_path = run_dir / "executed" / "nbformat_stub_demo.executed.ipynb"
+    executed_notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+
+    assert executed_notebook["nbformat"] == 4
+    assert executed_notebook["nbformat_minor"] == 5
+    assert executed_notebook["metadata"]["actual_notebook_execution"] is False
+    assert executed_notebook["metadata"]["papermill_invoked"] is False
+    assert executed_notebook["metadata"]["nbclient_invoked"] is False
+    assert executed_notebook["metadata"]["kernelspec"]["name"] == "python3"
+    assert executed_notebook["metadata"]["language_info"]["name"] == "python"
+    assert len(executed_notebook["cells"]) == 2
+    assert executed_notebook["cells"][0]["cell_type"] == "markdown"
+    assert executed_notebook["cells"][1]["cell_type"] == "code"
+    assert executed_notebook["cells"][1]["execution_count"] is None
+    assert executed_notebook["cells"][1]["outputs"] == []
+    assert "ACTUAL_NOTEBOOK_EXECUTION = False" in "".join(executed_notebook["cells"][1]["source"])
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "passed"
+    assert result["checks"]["executed_notebook_stub_shape"] == "passed"
+
+
+def test_verify_fails_when_notebook_stub_contains_execution_outputs(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "executed_output_stub_demo")
+
+    notebook_path = run_dir / "executed" / "executed_output_stub_demo.executed.ipynb"
+    executed_notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    executed_notebook["cells"][1]["execution_count"] = 1
+    executed_notebook["cells"][1]["outputs"] = [{"output_type": "stream", "name": "stdout", "text": "not allowed"}]
+    notebook_path.write_text(json.dumps(executed_notebook, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["executed_notebook_stub_shape"] == "failed"
+    assert any("execution_count must be null" in error for error in result["notebook_stub_errors"])
+    assert any("outputs must be empty" in error for error in result["notebook_stub_errors"])
+
+
+def test_optional_papermill_dependency_boundary_is_recorded_without_execution(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "optional_dependency_demo")
+
+    execution_record = json.loads(
+        (run_dir / "records" / "execution_record.json").read_text(encoding="utf-8")
+    )
+    papermill_parameters = json.loads(
+        (run_dir / "parameters" / "papermill_parameters.json").read_text(encoding="utf-8")
+    )
+
+    for record in (execution_record, papermill_parameters):
+        boundary = record["optional_dependency_boundary"]
+
+        assert boundary["required_for_v0_1"] is False
+        assert boundary["execution_enabled_by_default"] is False
+        assert boundary["real_execution_allowed"] is False
+        assert boundary["dependency_probe_method"] == "importlib.util.find_spec"
+        assert boundary["dependencies"]["papermill"]["module"] == "papermill"
+        assert isinstance(boundary["dependencies"]["papermill"]["available"], bool)
+        assert boundary["dependencies"]["papermill"]["used"] is False
+        assert boundary["dependencies"]["nbclient"]["module"] == "nbclient"
+        assert isinstance(boundary["dependencies"]["nbclient"]["available"], bool)
+        assert boundary["dependencies"]["nbclient"]["used"] is False
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "passed"
+    assert result["checks"]["optional_papermill_dependency_boundary_conservative"] == "passed"
+
+
+def test_verify_fails_when_optional_dependency_boundary_allows_real_execution(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "bad_optional_dependency_demo")
+
+    execution_record_path = run_dir / "records" / "execution_record.json"
+    execution_record = json.loads(execution_record_path.read_text(encoding="utf-8"))
+    execution_record["optional_dependency_boundary"]["real_execution_allowed"] = True
+    execution_record["optional_dependency_boundary"]["dependencies"]["papermill"]["used"] = True
+    execution_record_path.write_text(json.dumps(execution_record, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["optional_papermill_dependency_boundary_conservative"] == "failed"
+    assert any("real_execution_allowed must be false" in error for error in result["optional_dependency_boundary_errors"])
+    assert any("dependencies.papermill.used must be false" in error for error in result["optional_dependency_boundary_errors"])

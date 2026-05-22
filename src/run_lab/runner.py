@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timezone
+from importlib.util import find_spec
 import html
 
 from .constants import AUTHORITY_FLAGS, PLACEHOLDER_AUTHORITY_FLAGS
@@ -17,7 +18,29 @@ def _placeholder_fields(placeholder_for: str) -> dict:
         "placeholder_for": placeholder_for,
         "placeholder_authority_flags": dict(PLACEHOLDER_AUTHORITY_FLAGS),
     }
-
+    
+    
+def _optional_dependency_boundary() -> dict:
+    return {
+        "required_for_v0_1": False,
+        "execution_enabled_by_default": False,
+        "real_execution_allowed": False,
+        "dependency_probe_method": "importlib.util.find_spec",
+        "dependencies": {
+            "papermill": {
+                "module": "papermill",
+                "available": find_spec("papermill") is not None,
+                "used": False,
+            },
+            "nbclient": {
+                "module": "nbclient",
+                "available": find_spec("nbclient") is not None,
+                "used": False,
+            },
+        },
+        "authority_note": "Optional dependency availability is recorded only; RunLab v0.1 does not execute notebooks.",
+    }    
+    
 
 def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = "rag_literature_demo", render: str = "html") -> Path:
     root = Path(workspace)
@@ -63,12 +86,21 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
         **_placeholder_fields("future_txtai_index_reference"),
     })
 
+    notebook_template = job.get("notebook_template", "notebooks/templates/literature_evidence_runner.ipynb")
+    executed_notebook = f"executed/{output_prefix}.executed.ipynb"
+    optional_dependency_boundary = _optional_dependency_boundary()
+
     write_json(run_dir / "parameters" / "papermill_parameters.json", {
         "record_type": "papermill_parameters",
+        "run_id": output_prefix,
         "execution_mode": "placeholder_no_papermill",
+        "execution_backend": "placeholder_papermill",
+        "optional_dependency_boundary": optional_dependency_boundary,        
+        "notebook_template": notebook_template,
+        "executed_notebook": executed_notebook,
         "query": job.get("query"),
         "authority_flags": dict(AUTHORITY_FLAGS),
-        **_placeholder_fields("future_papermill_parameters"),
+        **_placeholder_fields("future_papermill_notebook_execution"),
     })
 
     write_json(run_dir / "records" / "retrieval_record.json", {
@@ -109,26 +141,23 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
         "authority_note": "Context supports inspection only and does not prove correctness.",
     })
 
-    executed = run_dir / "executed" / f"{output_prefix}.executed.ipynb"
-    write_json(executed, {
-        "cells": [],
-        "metadata": {
-            "run_lab_execution": "placeholder",
-            "integration_status": "placeholder",
-            "placeholder_for": "future_papermill_execution",
-        },
-        "nbformat": 4,
-        "nbformat_minor": 5,
-    })
+    executed = run_dir / executed_notebook
+    write_json(executed, _build_placeholder_notebook_stub(
+        run_id=output_prefix,
+        query=job.get("query"),
+        notebook_template=notebook_template,
+    ))
 
     write_json(run_dir / "records" / "execution_record.json", {
         "record_type": "execution_record",
         "run_id": output_prefix,
         "execution_status": "placeholder_executed",
-        "execution_backend": "static_placeholder_no_papermill",
-        "executed_notebook": str(executed.relative_to(run_dir)),
+        "execution_backend": "placeholder_papermill",
+        "optional_dependency_boundary": optional_dependency_boundary,
+        "notebook_template": notebook_template,
+        "executed_notebook": executed_notebook,
         "authority_flags": dict(AUTHORITY_FLAGS),
-        **_placeholder_fields("future_papermill_execution"),
+        **_placeholder_fields("future_papermill_notebook_execution"),
     })
 
     write_json(run_dir / "records" / "environment_report.json", {
@@ -153,6 +182,65 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
 
     _write_manifests(run_dir, output_prefix, created)
     return run_dir
+
+
+def _build_placeholder_notebook_stub(run_id: str, query: str | None, notebook_template: str) -> dict:
+    return {
+        "cells": [
+            {
+                "cell_type": "markdown",
+                "metadata": {
+                    "run_lab_cell_role": "evidence_boundary_notice",
+                },
+                "source": [
+                    "# RunLab placeholder notebook stub\n",
+                    "\n",
+                    "This notebook-shaped artifact was generated for evidence-packet inspection only.\n",
+                    "It was not executed by Papermill, nbclient, Jupyter Notebook, or JupyterLab.\n",
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {
+                    "run_lab_cell_role": "placeholder_parameters",
+                    "integration_status": "placeholder",
+                    "placeholder_for": "future_papermill_notebook_execution",
+                },
+                "outputs": [],
+                "source": [
+                    "# Placeholder parameters for future Papermill execution\n",
+                    f"RUN_ID = {run_id!r}\n",
+                    f"QUERY = {query!r}\n",
+                    f"NOTEBOOK_TEMPLATE = {notebook_template!r}\n",
+                    "ACTUAL_NOTEBOOK_EXECUTION = False\n",
+                ],
+            },
+        ],
+        "metadata": {
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {
+                "name": "python",
+                "pygments_lexer": "ipython3",
+            },
+            "run_lab_execution": "placeholder",
+            "run_id": run_id,
+            "notebook_template": notebook_template,
+            "execution_backend": "placeholder_papermill",
+            "integration_status": "placeholder",
+            "placeholder_for": "future_papermill_notebook_execution",
+            "actual_notebook_execution": False,
+            "papermill_invoked": False,
+            "nbclient_invoked": False,
+            "optional_dependency_boundary": _optional_dependency_boundary(),
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
 
 
 def _write_manifests(run_dir: Path, run_id: str, created: str) -> None:

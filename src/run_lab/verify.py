@@ -80,7 +80,12 @@ REQUIRED_FIELDS = {
     ],
     "parameters/papermill_parameters.json": [
         "record_type",
+        "run_id",
         "execution_mode",
+        "execution_backend",
+        "optional_dependency_boundary",
+        "notebook_template",
+        "executed_notebook",
         "query",
         "authority_flags",
         "integration_status",
@@ -92,6 +97,8 @@ REQUIRED_FIELDS = {
         "run_id",
         "execution_status",
         "execution_backend",
+        "optional_dependency_boundary",
+        "notebook_template",
         "executed_notebook",
         "authority_flags",
         "integration_status",
@@ -204,6 +211,8 @@ def verify_run(run_dir: str | Path) -> dict:
     replay_artifact_errors = _check_replay_manifest_artifact_presence(run_dir, parsed_json)
     run_id_errors = _check_run_id_consistency(parsed_json)
     safe_path_errors = _check_safe_relative_packet_paths(parsed_json)
+    notebook_stub_errors = _check_executed_notebook_stub_shape(run_dir, parsed_json)
+    optional_dependency_boundary_errors = _check_optional_dependency_boundary(parsed_json)
 
     checks = {
         "required_artifacts_present": _status(not missing),
@@ -217,6 +226,8 @@ def verify_run(run_dir: str | Path) -> dict:
         "replay_manifest_artifacts_exist": _status(not replay_artifact_errors),
         "record_run_ids_consistent": _status(not run_id_errors),
         "packet_paths_safe_relative_posix": _status(not safe_path_errors),
+        "executed_notebook_stub_shape": _status(not notebook_stub_errors),
+        "optional_papermill_dependency_boundary_conservative": _status(not optional_dependency_boundary_errors),
     }
     status = "passed" if all(value == CHECK_PASSED for value in checks.values()) else "failed"
 
@@ -235,6 +246,8 @@ def verify_run(run_dir: str | Path) -> dict:
         "replay_artifact_errors": replay_artifact_errors,
         "run_id_errors": run_id_errors,
         "safe_path_errors": safe_path_errors,
+        "notebook_stub_errors": notebook_stub_errors,
+        "optional_dependency_boundary_errors": optional_dependency_boundary_errors,
         "authority_flags": dict(AUTHORITY_FLAGS),
         "authority_note": "RunLab verification is mechanical artifact-shape checking only, not scientific validation.",
     }
@@ -322,6 +335,120 @@ def _check_replay_manifest_artifact_presence(run_dir: Path, parsed_json: dict[st
             continue
         if not (run_dir / rel).exists():
             errors.append(f"records/replay_manifest.json: replay artifact does not exist: {rel}")
+
+    return errors
+
+
+
+def _check_optional_dependency_boundary(parsed_json: dict[str, dict]) -> list[str]:
+    errors = []
+    required_records = [
+        "parameters/papermill_parameters.json",
+        "records/execution_record.json",
+    ]
+
+    for rel in required_records:
+        record = parsed_json.get(rel)
+        if record is None:
+            continue
+
+        boundary = record.get("optional_dependency_boundary")
+        if not isinstance(boundary, dict):
+            errors.append(f"{rel}: optional_dependency_boundary must be an object")
+            continue
+
+        if boundary.get("required_for_v0_1") is not False:
+            errors.append(f"{rel}: optional_dependency_boundary.required_for_v0_1 must be false")
+        if boundary.get("execution_enabled_by_default") is not False:
+            errors.append(f"{rel}: optional_dependency_boundary.execution_enabled_by_default must be false")
+        if boundary.get("real_execution_allowed") is not False:
+            errors.append(f"{rel}: optional_dependency_boundary.real_execution_allowed must be false")
+        if boundary.get("dependency_probe_method") != "importlib.util.find_spec":
+            errors.append(f"{rel}: optional_dependency_boundary.dependency_probe_method must be importlib.util.find_spec")
+
+        dependencies = boundary.get("dependencies")
+        if not isinstance(dependencies, dict):
+            errors.append(f"{rel}: optional_dependency_boundary.dependencies must be an object")
+            continue
+
+        for dependency_name in ("papermill", "nbclient"):
+            dependency = dependencies.get(dependency_name)
+            if not isinstance(dependency, dict):
+                errors.append(f"{rel}: optional_dependency_boundary.dependencies.{dependency_name} must be an object")
+                continue
+
+            if dependency.get("module") != dependency_name:
+                errors.append(f"{rel}: optional_dependency_boundary.dependencies.{dependency_name}.module must be {dependency_name!r}")
+            if not isinstance(dependency.get("available"), bool):
+                errors.append(f"{rel}: optional_dependency_boundary.dependencies.{dependency_name}.available must be boolean")
+            if dependency.get("used") is not False:
+                errors.append(f"{rel}: optional_dependency_boundary.dependencies.{dependency_name}.used must be false")
+
+    return errors
+
+def _check_executed_notebook_stub_shape(run_dir: Path, parsed_json: dict[str, dict]) -> list[str]:
+    execution_record = parsed_json.get("records/execution_record.json")
+    if execution_record is None:
+        return []
+
+    executed_notebook = execution_record.get("executed_notebook")
+    if not isinstance(executed_notebook, str) or not executed_notebook:
+        return ["records/execution_record.json: executed_notebook must be a non-empty string"]
+    if not _is_safe_relative_posix_path(executed_notebook):
+        return [f"records/execution_record.json: executed_notebook must be a safe relative POSIX path: {executed_notebook}"]
+
+    notebook_path = run_dir / executed_notebook
+    if not notebook_path.exists():
+        return [f"records/execution_record.json: executed_notebook does not exist: {executed_notebook}"]
+
+    try:
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [f"{executed_notebook}: invalid notebook JSON: {exc}"]
+
+    errors = []
+    if not isinstance(notebook, dict):
+        return [f"{executed_notebook}: notebook JSON must be an object"]
+
+    if notebook.get("nbformat") != 4:
+        errors.append(f"{executed_notebook}: nbformat must be 4")
+    if not isinstance(notebook.get("nbformat_minor"), int):
+        errors.append(f"{executed_notebook}: nbformat_minor must be an integer")
+
+    cells = notebook.get("cells")
+    if not isinstance(cells, list) or not cells:
+        errors.append(f"{executed_notebook}: cells must be a non-empty list")
+        return errors
+
+    metadata = notebook.get("metadata")
+    if not isinstance(metadata, dict):
+        errors.append(f"{executed_notebook}: metadata must be an object")
+    else:
+        if metadata.get("run_lab_execution") != "placeholder":
+            errors.append(f"{executed_notebook}: metadata.run_lab_execution must be 'placeholder'")
+        if metadata.get("actual_notebook_execution") is not False:
+            errors.append(f"{executed_notebook}: metadata.actual_notebook_execution must be false")
+        if metadata.get("papermill_invoked") is not False:
+            errors.append(f"{executed_notebook}: metadata.papermill_invoked must be false")
+        if metadata.get("nbclient_invoked") is not False:
+            errors.append(f"{executed_notebook}: metadata.nbclient_invoked must be false")
+
+    for index, cell in enumerate(cells):
+        if not isinstance(cell, dict):
+            errors.append(f"{executed_notebook}: cell {index} must be an object")
+            continue
+        cell_type = cell.get("cell_type")
+        if cell_type not in {"markdown", "code"}:
+            errors.append(f"{executed_notebook}: cell {index} has unsupported cell_type {cell_type!r}")
+        if "source" not in cell:
+            errors.append(f"{executed_notebook}: cell {index} missing source")
+        if not isinstance(cell.get("metadata"), dict):
+            errors.append(f"{executed_notebook}: cell {index} metadata must be an object")
+        if cell_type == "code":
+            if cell.get("execution_count") is not None:
+                errors.append(f"{executed_notebook}: code cell {index} execution_count must be null for placeholder stubs")
+            if cell.get("outputs") != []:
+                errors.append(f"{executed_notebook}: code cell {index} outputs must be empty for placeholder stubs")
 
     return errors
 
