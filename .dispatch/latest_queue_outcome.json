@@ -1,0 +1,23 @@
+{
+  "active_slicer": null,
+  "active_srs": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/srs/incoming/SRS_v1_1_dispatcher_dev_smoke.md",
+  "blindwrite_executed": false,
+  "blindwrite_handoff_path": null,
+  "blindwrite_outcome_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/latest_blindwrite_outcome.json",
+  "blindwrite_returncode": null,
+  "blocked_reason": null,
+  "correctness_proven": false,
+  "created_at": "2026-05-23T03:48:08Z",
+  "evidence_type": "dispatcher_queue_outcome",
+  "outcome_status": "execution_skipped",
+  "queue_action": "no_mutation",
+  "queue_mutated": false,
+  "queue_mutation_allowed": false,
+  "queue_state_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/repo_queue_state.json",
+  "repo_name": "run-lab",
+  "repo_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab",
+  "routing_record_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/latest_routing_record.json",
+  "stale_carried_forward": false,
+  "waiting_for_human": false,
+  "wcp_handoff_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/latest_wcp_handoff.json"
+}

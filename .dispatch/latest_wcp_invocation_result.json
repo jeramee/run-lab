@@ -1,0 +1,23 @@
+{
+  "blocked_reason": "wcp_handoff_not_ready",
+  "copied_files": [],
+  "created_at": "2026-05-23T03:48:08Z",
+  "evidence_type": "dispatcher_wcp_invocation_result",
+  "pushed": false,
+  "queue_mutated": false,
+  "queue_outcome_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/latest_queue_outcome.json",
+  "queue_state_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/repo_queue_state.json",
+  "repo_name": "run-lab",
+  "repo_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab",
+  "settled": false,
+  "tier3_hermes_handoff_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/latest_tier3_hermes_handoff.json",
+  "wcp_command": null,
+  "wcp_handoff_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/latest_wcp_handoff.json",
+  "wcp_invocation_allowed": false,
+  "wcp_invoked": false,
+  "wcp_mode": "dry_run_audit_only_no_push",
+  "wcp_result_status": "blocked",
+  "wcp_returncode": null,
+  "wcp_stderr": "",
+  "wcp_stdout": ""
+}

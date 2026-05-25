@@ -1,0 +1,16 @@
+{
+  "active_slicer": null,
+  "active_srs": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/srs/incoming/SRS_v1_1_dispatcher_dev_smoke.md",
+  "blocked_reason": null,
+  "created_at": "2026-05-23T03:48:08Z",
+  "next_stage": "tier1",
+  "record_type": "write_commit_push_repo_queue_state",
+  "repo_name": "run-lab",
+  "repo_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab",
+  "slicer_candidates": [],
+  "srs_candidates": [
+    "/home/jeramee/.openclaw/workspace/control-repos/run-lab/srs/incoming/SRS_v1_1_dispatcher_dev_smoke.md"
+  ],
+  "state_path": "/home/jeramee/.openclaw/workspace/control-repos/run-lab/.dispatch/repo_queue_state.json",
+  "waiting_for_human": false
+}
