@@ -1018,3 +1018,30 @@ def test_verify_fails_when_txtai_handoff_claims_txtai_was_called(tmp_path):
     assert result["checks"]["txtai_context_handoff_conservative"] == "failed"
     assert any("txtai_called must be false" in error for error in result["txtai_handoff_errors"])
 
+def test_verify_fails_when_txtai_handoff_claims_downstream_authority(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+
+    forbidden_fields = [
+        "txtai_called",
+        "embeddings_created",
+        "rag_answer_generated",
+        "scientific_proof_claimed",
+    ]
+
+    for field in forbidden_fields:
+        run_dir = run_demo(
+            workspace,
+            "jobs/rag_literature_demo.json",
+            f"bad_txtai_handoff_{field}_demo",
+        )
+
+        manifest_path = run_dir / "handoff" / "txtai_context_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest[field] = True
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        result = verify_run(run_dir)
+
+        assert result["verification_status"] == "failed"
+        assert result["checks"]["txtai_context_handoff_conservative"] == "failed"
+        assert any(f"{field} must be false" in error for error in result["txtai_handoff_errors"])
