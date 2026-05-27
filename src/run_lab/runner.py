@@ -65,7 +65,7 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
     run_dir = root / "runs" / output_prefix
     if run_dir.exists():
         raise FileExistsError(f"Run packet already exists and will not be overwritten: {run_dir}")
-    for sub in ("inputs", "parameters", "executed", "records", "context", "reports", "logs"):
+    for sub in ("inputs", "parameters", "executed", "records", "context", "reports", "handoff", "logs"):
         (run_dir / sub).mkdir(parents=True, exist_ok=True)
 
     index_path = root / job.get("index_ref", "indexes/local_demo_index.json")
@@ -157,6 +157,8 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
         "authority_note": "Context supports inspection only and does not prove correctness.",
     })
 
+    _write_txtai_context_handoff(run_dir=run_dir, run_id=output_prefix, query=job.get("query"))
+
     executed = run_dir / executed_notebook
     write_json(executed, _build_placeholder_notebook_stub(
         run_id=output_prefix,
@@ -200,6 +202,57 @@ def run_demo(workspace: str | Path, query_job: str | Path, output_prefix: str = 
 
     _write_manifests(run_dir, output_prefix, created)
     return run_dir
+
+
+def _write_txtai_context_handoff(run_dir: Path, run_id: str, query: str | None) -> None:
+    question = str(query).strip() if query else ""
+    if not question:
+        question = "No research question was recorded in this run."
+
+    markdown = (
+        "# RunLab txtai Context\n"
+        "\n"
+        "## Research question\n"
+        "\n"
+        f"{question}\n"
+        "\n"
+        "## Selected index\n"
+        "\n"
+        "No live txtai/local index was selected in this run.\n"
+        "\n"
+        "## Retrieved context\n"
+        "\n"
+        "First run.\n"
+        "\n"
+        "No live retrieval was executed in this run.\n"
+        "\n"
+        "## Source citations\n"
+        "\n"
+        "No source citations were captured in this run.\n"
+        "\n"
+        "## Boundary notes\n"
+        "\n"
+        "- Prepared for txtai later: yes\n"
+        "- txtai called: no\n"
+        "- Embeddings created: no\n"
+        "- RAG answer generated: no\n"
+        "- Scientific proof claimed: no\n"
+    )
+
+    context_path = run_dir / "handoff" / "txtai_context.md"
+    context_path.write_text(markdown, encoding="utf-8")
+
+    write_json(run_dir / "handoff" / "txtai_context_manifest.json", {
+        "record_type": "txtai_context_manifest",
+        "run_id": run_id,
+        "context_markdown_path": "handoff/txtai_context.md",
+        "context_markdown_sha256": sha256_file(context_path),
+        "prepared_for": "txtai",
+        "txtai_called": False,
+        "embeddings_created": False,
+        "rag_answer_generated": False,
+        "scientific_proof_claimed": False,
+    })
 
 
 def _build_placeholder_notebook_stub(
@@ -279,6 +332,8 @@ def _write_manifests(run_dir: Path, run_id: str, created: str) -> None:
         "records/source_citation_record.json",
         "records/context_pack.json",
         "context/context_pack.md",
+        "handoff/txtai_context.md",
+        "handoff/txtai_context_manifest.json",
         "records/execution_record.json",
         "records/environment_report.json",
         f"executed/{run_id}.executed.ipynb",
@@ -319,7 +374,12 @@ def _write_manifests(run_dir: Path, run_id: str, created: str) -> None:
         if path == artifact_manifest_path:
             continue
         rel = path.relative_to(run_dir).as_posix()
-        artifacts.append({"path": rel, "hash": {"algorithm": "sha256", "value": sha256_file(path)}})
+        artifact = {"path": rel, "hash": {"algorithm": "sha256", "value": sha256_file(path)}}
+        if rel == "handoff/txtai_context.md":
+            artifact["artifact_type"] = "txtai_context_markdown"
+        elif rel == "handoff/txtai_context_manifest.json":
+            artifact["artifact_type"] = "txtai_context_manifest"
+        artifacts.append(artifact)
 
     artifacts.append({
         "path": artifact_manifest_path.relative_to(run_dir).as_posix(),

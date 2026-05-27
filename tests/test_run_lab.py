@@ -955,3 +955,66 @@ def test_verify_fails_when_notebook_template_claims_execution(tmp_path):
     assert any("execution_count must be null" in error for error in result["notebook_template_errors"])
     assert any("outputs must be empty" in error for error in result["notebook_template_errors"])
 
+def test_run_packet_creates_txtai_ready_context_handoff(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "txtai_handoff_demo")
+
+    context_path = run_dir / "handoff" / "txtai_context.md"
+    manifest_path = run_dir / "handoff" / "txtai_context_manifest.json"
+
+    assert context_path.exists()
+    assert manifest_path.exists()
+
+    context_markdown = context_path.read_text(encoding="utf-8")
+    assert "# RunLab txtai Context" in context_markdown
+    assert "## Research question" in context_markdown
+    assert "## Selected index" in context_markdown
+    assert "## Retrieved context" in context_markdown
+    assert "## Source citations" in context_markdown
+    assert "## Boundary notes" in context_markdown
+    assert "- Prepared for txtai later: yes" in context_markdown
+    assert "- txtai called: no" in context_markdown
+    assert "- Embeddings created: no" in context_markdown
+    assert "- RAG answer generated: no" in context_markdown
+    assert "- Scientific proof claimed: no" in context_markdown
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["record_type"] == "txtai_context_manifest"
+    assert manifest["run_id"] == "txtai_handoff_demo"
+    assert manifest["context_markdown_path"] == "handoff/txtai_context.md"
+    assert manifest["context_markdown_sha256"]
+    assert manifest["prepared_for"] == "txtai"
+    assert manifest["txtai_called"] is False
+    assert manifest["embeddings_created"] is False
+    assert manifest["rag_answer_generated"] is False
+    assert manifest["scientific_proof_claimed"] is False
+
+    artifact_manifest = json.loads((run_dir / "records" / "artifact_manifest.json").read_text(encoding="utf-8"))
+    artifacts_by_path = {
+        artifact.get("path"): artifact
+        for artifact in artifact_manifest["artifacts"]
+        if isinstance(artifact, dict)
+    }
+    assert artifacts_by_path["handoff/txtai_context.md"]["artifact_type"] == "txtai_context_markdown"
+    assert artifacts_by_path["handoff/txtai_context_manifest.json"]["artifact_type"] == "txtai_context_manifest"
+
+    result = verify_run(run_dir)
+    assert result["verification_status"] == "passed"
+    assert result["checks"]["txtai_context_handoff_conservative"] == "passed"
+
+
+def test_verify_fails_when_txtai_handoff_claims_txtai_was_called(tmp_path):
+    workspace = init_workspace(tmp_path / "workspace")
+    run_dir = run_demo(workspace, "jobs/rag_literature_demo.json", "bad_txtai_handoff_demo")
+
+    manifest_path = run_dir / "handoff" / "txtai_context_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["txtai_called"] = True
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    result = verify_run(run_dir)
+
+    assert result["verification_status"] == "failed"
+    assert result["checks"]["txtai_context_handoff_conservative"] == "failed"
+    assert any("txtai_called must be false" in error for error in result["txtai_handoff_errors"])
+

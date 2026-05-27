@@ -15,6 +15,8 @@ REQUIRED = [
     "records/source_citation_record.json",
     "records/context_pack.json",
     "context/context_pack.md",
+    "handoff/txtai_context.md",
+    "handoff/txtai_context_manifest.json",
     "records/environment_report.json",
     "records/replay_manifest.json",
     "records/artifact_manifest.json",
@@ -34,6 +36,7 @@ REQUIRED_RECORD_TYPES = {
     "records/environment_report.json": "environment_report",
     "records/replay_manifest.json": "replay_manifest",
     "records/artifact_manifest.json": "artifact_manifest",
+    "handoff/txtai_context_manifest.json": "txtai_context_manifest",
 }
 
 REQUIRED_AUTHORITY_FLAG_RECORDS = [
@@ -172,6 +175,17 @@ REQUIRED_FIELDS = {
         "artifacts",
         "authority_flags",
     ],
+    "handoff/txtai_context_manifest.json": [
+        "record_type",
+        "run_id",
+        "context_markdown_path",
+        "context_markdown_sha256",
+        "prepared_for",
+        "txtai_called",
+        "embeddings_created",
+        "rag_answer_generated",
+        "scientific_proof_claimed",
+    ],
 }
 
 
@@ -217,6 +231,7 @@ def verify_run(run_dir: str | Path) -> dict:
     notebook_template_errors = _check_notebook_template_stub_shape(run_dir, parsed_json)
     optional_dependency_boundary_errors = _check_optional_dependency_boundary(parsed_json)
     notebook_execution_policy_errors = _check_notebook_execution_disabled_policy(run_dir, parsed_json)
+    txtai_handoff_errors = _check_txtai_context_handoff(run_dir, parsed_json)
 
     checks = {
         "required_artifacts_present": _status(not missing),
@@ -234,6 +249,7 @@ def verify_run(run_dir: str | Path) -> dict:
         "notebook_template_stub_shape": _status(not notebook_template_errors),
         "optional_papermill_dependency_boundary_conservative": _status(not optional_dependency_boundary_errors),
         "papermill_execution_disabled_by_default": _status(not notebook_execution_policy_errors),
+        "txtai_context_handoff_conservative": _status(not txtai_handoff_errors),
     }
     status = "passed" if all(value == CHECK_PASSED for value in checks.values()) else "failed"
 
@@ -256,6 +272,7 @@ def verify_run(run_dir: str | Path) -> dict:
         "notebook_template_errors": notebook_template_errors,
         "optional_dependency_boundary_errors": optional_dependency_boundary_errors,
         "notebook_execution_policy_errors": notebook_execution_policy_errors,
+        "txtai_handoff_errors": txtai_handoff_errors,
         "authority_flags": dict(AUTHORITY_FLAGS),
         "authority_note": "RunLab verification is mechanical artifact-shape checking only, not scientific validation.",
     }
@@ -269,6 +286,64 @@ def verify_run(run_dir: str | Path) -> dict:
 
 def _status(ok: bool) -> str:
     return CHECK_PASSED if ok else CHECK_FAILED
+
+
+def _check_txtai_context_handoff(run_dir: Path, parsed_json: dict[str, dict]) -> list[str]:
+    errors: list[str] = []
+    markdown_rel = "handoff/txtai_context.md"
+    manifest_rel = "handoff/txtai_context_manifest.json"
+    markdown_path = run_dir / markdown_rel
+    manifest = parsed_json.get(manifest_rel)
+
+    if manifest is None:
+        return errors
+
+    if not markdown_path.exists():
+        errors.append(f"{markdown_rel}: missing txtai context Markdown handoff")
+        return errors
+
+    markdown = markdown_path.read_text(encoding="utf-8")
+    required_headings = [
+        "# RunLab txtai Context",
+        "## Research question",
+        "## Selected index",
+        "## Retrieved context",
+        "## Source citations",
+        "## Boundary notes",
+    ]
+    for heading in required_headings:
+        if heading not in markdown:
+            errors.append(f"{markdown_rel}: missing required heading {heading!r}")
+
+    required_boundary_lines = [
+        "- Prepared for txtai later: yes",
+        "- txtai called: no",
+        "- Embeddings created: no",
+        "- RAG answer generated: no",
+        "- Scientific proof claimed: no",
+    ]
+    for line in required_boundary_lines:
+        if line not in markdown:
+            errors.append(f"{markdown_rel}: missing boundary line {line!r}")
+
+    if manifest.get("context_markdown_path") != markdown_rel:
+        errors.append(f"{manifest_rel}: context_markdown_path must be {markdown_rel!r}")
+    if manifest.get("context_markdown_sha256") != sha256_file(markdown_path):
+        errors.append(f"{manifest_rel}: context_markdown_sha256 does not match {markdown_rel}")
+    if manifest.get("prepared_for") != "txtai":
+        errors.append(f"{manifest_rel}: prepared_for must be 'txtai'")
+
+    false_fields = [
+        "txtai_called",
+        "embeddings_created",
+        "rag_answer_generated",
+        "scientific_proof_claimed",
+    ]
+    for field in false_fields:
+        if manifest.get(field) is not False:
+            errors.append(f"{manifest_rel}: {field} must be false")
+
+    return errors
 
 
 def _check_record_types(parsed_json: dict[str, dict]) -> list[str]:
